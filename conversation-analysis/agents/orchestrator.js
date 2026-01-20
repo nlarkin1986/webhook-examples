@@ -1,20 +1,54 @@
 /**
  * Orchestrator Agent
  *
- * Coordinates the conversation analysis workflow:
+ * Coordinates the conversation analysis workflow using tool-based composition:
  * 1. Fetches conversation and customer data using tools
- * 2. Dispatches to Sentiment and Intent specialist agents
+ * 2. Calls analyze_sentiment and analyze_intent tools (specialist agents exposed as tools)
  * 3. Matches detected topics to predefined Gladly topics
  * 4. Applies matching topics to the conversation
  * 5. Returns structured analysis results
  *
+ * Following agent-native principles, specialist agents are exposed as tools
+ * so the orchestrator decides when to invoke them via prompts rather than
+ * hardcoded dispatch logic.
+ *
  * Uses Claude Sonnet for nuanced judgment and coordination.
+ *
+ * ============================================================================
+ * ARCHITECTURE DECISION: Agentic Loop (Intentional Design)
+ * ============================================================================
+ *
+ * This orchestrator uses an agentic loop intentionally for agent-native flexibility:
+ *
+ * - Agent decides which tools to call based on conversation content
+ *   The LLM can adapt the workflow dynamically based on what it observes,
+ *   rather than following a rigid sequence of function calls.
+ *
+ * - Enables future extensions (e.g., skip analysis for simple greetings)
+ *   The agent can make intelligent decisions like skipping expensive analysis
+ *   for trivial conversations or escalating complex ones differently.
+ *
+ * - Supports self-correcting behavior if initial analysis is poor
+ *   If the agent detects low confidence results, it can retry or adjust
+ *   its approach without code changes.
+ *
+ * - New analysis types can be added via prompt changes, not code
+ *   Adding new capabilities (e.g., urgency detection, language identification)
+ *   requires only prompt updates, not new function implementations.
+ *
+ * The tradeoff of extra iterations is worth the composability benefit.
+ *
+ * Alternative considered: Direct function calls with Promise.all() for parallel
+ * fetching. While simpler and faster for the current fixed workflow, it loses
+ * the agent-native flexibility that makes this architecture extensible.
+ *
+ * See: todos/013-ready-p3-over-engineered-orchestrator.md for full analysis.
+ * ============================================================================
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { toolDefinitions, executeTool, formatToolResult } = require('../tools/gladly-tools');
-const { runSentimentAgent } = require('./sentiment-agent');
-const { runIntentAgent } = require('./intent-agent');
+const { rateLimitedClaudeCall } = require('../utils/claude-limiter');
 
 const anthropic = new Anthropic();
 
@@ -29,15 +63,18 @@ You coordinate specialist agents and tools to analyze conversations, classify th
 - get_customer: Read customer profile (name, emails, phones, attributes)
 - list_topics: List all predefined Gladly topics available
 - add_topic: Add a predefined topic to the conversation
+- remove_topic: Remove a topic from the conversation
+- analyze_sentiment: Run sentiment analysis on conversation messages
+- analyze_intent: Classify customer intent and match to available topics
 - complete_task: Signal when analysis is complete
 
 ## Your Workflow
 1. Use get_conversation and get_conversation_items to fetch the conversation data
 2. Use get_customer to understand the customer context
-3. Analyze the conversation content for sentiment and intent (done automatically)
-4. Use list_topics to see what predefined topics are available
-5. Match detected topics to predefined Gladly topics
-6. Use add_topic for each matching topic ID
+3. Use list_topics to see what predefined topics are available
+4. Use analyze_sentiment with the conversation content (as JSON string) to get sentiment analysis
+5. Use analyze_intent with conversation content (as JSON string) and available topics to classify intent
+6. Use add_topic for each matched topic ID from the intent analysis
 7. Call complete_task with your structured results
 
 ## Important Rules
@@ -45,6 +82,8 @@ You coordinate specialist agents and tools to analyze conversations, classify th
 - If no matching predefined topic exists, note it but continue
 - Always call complete_task when finished
 - Be thorough but efficient - minimize unnecessary tool calls
+- You decide when to run sentiment and intent analysis - use them when you have conversation data
+- For analyze_sentiment and analyze_intent, pass conversation_content as a JSON string of the items
 
 ## Output Format
 When calling complete_task, include structured results with:
@@ -55,6 +94,11 @@ When calling complete_task, include structured results with:
 
 /**
  * Run the orchestrator agent
+ *
+ * This function implements the agentic loop that coordinates conversation analysis.
+ * The loop allows the agent to dynamically decide which tools to call and in what
+ * order, providing flexibility for future enhancements without code changes.
+ *
  * @param {object} context - Analysis context
  * @param {string} context.eventType - CONVERSATION/CREATED or CONVERSATION/CLOSED
  * @param {string} context.conversationId - Gladly conversation ID
@@ -82,7 +126,8 @@ Start by fetching the conversation data, then analyze and apply appropriate topi
 
   const messages = [{ role: 'user', content: initialPrompt }];
 
-  // Agentic loop
+  // Agentic loop - intentionally used for flexibility (see file header for rationale)
+  // The agent decides tool execution order based on conversation content
   let maxIterations = 15;
   let iteration = 0;
   let analysisComplete = false;
@@ -93,7 +138,7 @@ Start by fetching the conversation data, then analyze and apply appropriate topi
     console.log(`[Orchestrator] Iteration ${iteration}/${maxIterations}`);
 
     try {
-      const response = await anthropic.messages.create({
+      const response = await rateLimitedClaudeCall(anthropic, {
         model: 'claude-sonnet-4-20250514',
         max_tokens: 4096,
         system: ORCHESTRATOR_SYSTEM_PROMPT,
@@ -121,77 +166,43 @@ Start by fetching the conversation data, then analyze and apply appropriate topi
         // Add assistant message
         messages.push({ role: 'assistant', content: response.content });
 
-        // Process each tool call
-        const toolResults = [];
-        for (const toolUse of toolUseBlocks) {
-          console.log(`[Orchestrator] Tool call: ${toolUse.name}`);
+        // Execute all tool calls in parallel for efficiency
+        // The agent determines which tools to call; we optimize execution
+        console.log(`[Orchestrator] Executing ${toolUseBlocks.length} tool call(s) in parallel`);
+        const toolResults = await Promise.all(
+          toolUseBlocks.map(async (toolUse) => {
+            console.log(`[Orchestrator] Tool call: ${toolUse.name}`);
 
-          // Special handling for specialist agents
-          if (toolUse.name === 'analyze_sentiment') {
-            // This would be called if we had it as a tool, but we'll handle inline
-          }
+            const result = await executeTool(toolUse.name, toolUse.input);
+            console.log(`[Orchestrator] Tool result for ${toolUse.name}: ${result.success ? 'success' : 'error'}`);
 
-          const result = await executeTool(toolUse.name, toolUse.input);
-          console.log(`[Orchestrator] Tool result: ${result.success ? 'success' : 'error'}`);
+            // Log warnings for agent failures (result envelopes with fallbacks)
+            if (!result.success) {
+              if (toolUse.name === 'analyze_sentiment') {
+                console.warn(`[Orchestrator] Sentiment analysis failed:`, result.error);
+                console.warn(`[Orchestrator] Using fallback sentiment data`);
+              } else if (toolUse.name === 'analyze_intent') {
+                console.warn(`[Orchestrator] Intent analysis failed:`, result.error);
+                console.warn(`[Orchestrator] Using fallback intent data`);
+              }
+            }
 
-          // Check if this is complete_task
-          if (toolUse.name === 'complete_task') {
-            analysisComplete = true;
-            finalResult = result;
-          }
+            // Check if this is complete_task
+            if (toolUse.name === 'complete_task') {
+              analysisComplete = true;
+              finalResult = result;
+            }
 
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: formatToolResult(result)
-          });
-        }
+            return {
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: formatToolResult(result)
+            };
+          })
+        );
 
         // Add tool results
         messages.push({ role: 'user', content: toolResults });
-
-        // After getting conversation items, run specialist agents
-        const itemsToolUse = toolUseBlocks.find(t => t.name === 'get_conversation_items');
-        const topicsToolUse = toolUseBlocks.find(t => t.name === 'list_topics');
-
-        if (itemsToolUse && !messages.some(m => m._hasAgentResults)) {
-          // Get the items result
-          const itemsResultIdx = toolResults.findIndex(r =>
-            r.tool_use_id === itemsToolUse.id
-          );
-          if (itemsResultIdx >= 0) {
-            const itemsData = JSON.parse(toolResults[itemsResultIdx].content);
-
-            if (itemsData.success && itemsData.data) {
-              console.log(`[Orchestrator] Running specialist agents...`);
-
-              // Run sentiment and intent agents in parallel
-              const [sentimentResult, intentResult] = await Promise.all([
-                runSentimentAgent(itemsData.data),
-                runIntentAgent(itemsData.data, topicsToolUse ? await getTopicsFromResult(toolResults, topicsToolUse.id) : [])
-              ]);
-
-              console.log(`[Orchestrator] Sentiment: ${sentimentResult.label} (${sentimentResult.score})`);
-              console.log(`[Orchestrator] Intent: ${intentResult.primary_intent}`);
-              console.log(`[Orchestrator] Matched topics: ${intentResult.matched_topic_ids?.join(', ') || 'none'}`);
-
-              // Inject agent results into context
-              messages.push({
-                role: 'user',
-                content: `Specialist agent analysis complete:
-
-SENTIMENT ANALYSIS:
-${JSON.stringify(sentimentResult, null, 2)}
-
-INTENT ANALYSIS:
-${JSON.stringify(intentResult, null, 2)}
-
-Now apply the matched topics (matched_topic_ids) to the conversation using add_topic, then call complete_task with the full results.`,
-                _hasAgentResults: true
-              });
-            }
-          }
-        }
       }
 
     } catch (error) {
@@ -209,20 +220,6 @@ Now apply the matched topics (matched_topic_ids) to the conversation using add_t
   }
 
   return finalResult;
-}
-
-/**
- * Extract topics data from tool results
- */
-async function getTopicsFromResult(toolResults, toolUseId) {
-  const result = toolResults.find(r => r.tool_use_id === toolUseId);
-  if (result) {
-    const data = JSON.parse(result.content);
-    if (data.success && data.data) {
-      return data.data;
-    }
-  }
-  return [];
 }
 
 module.exports = { runOrchestrator };

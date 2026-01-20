@@ -13,6 +13,8 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { sanitizeForPrompt } = require('../utils/sanitize');
+const { rateLimitedClaudeCall } = require('../utils/claude-limiter');
 
 const anthropic = new Anthropic();
 
@@ -54,15 +56,18 @@ async function runSentimentAgent(conversationItems) {
   // Format messages for analysis
   const formattedMessages = formatConversationForAnalysis(conversationItems);
 
+  // Sanitize to prevent prompt injection attacks
+  const sanitizedMessages = sanitizeForPrompt(formattedMessages);
+
   try {
-    const response = await anthropic.messages.create({
+    const response = await rateLimitedClaudeCall(anthropic, {
       model: 'claude-3-5-haiku-20241022',
       max_tokens: 1024,
       system: SENTIMENT_SYSTEM_PROMPT,
       messages: [
         {
           role: 'user',
-          content: `Analyze the sentiment of this customer service conversation:\n\n${formattedMessages}`
+          content: `Analyze the sentiment of this customer service conversation:\n\n${sanitizedMessages}`
         }
       ]
     });
@@ -70,16 +75,28 @@ async function runSentimentAgent(conversationItems) {
     // Extract JSON from response
     const textContent = response.content.find(c => c.type === 'text');
     if (textContent) {
-      const result = parseJsonResponse(textContent.text);
-      console.log(`[Sentiment Agent] Result: ${result.label} (score: ${result.score})`);
-      return result;
+      const parseResult = parseJsonResponse(textContent.text);
+      if (parseResult.success) {
+        console.log(`[Sentiment Agent] Result: ${parseResult.data.label} (score: ${parseResult.data.score})`);
+        return parseResult;
+      }
+      // Parse failed, return with error info
+      return parseResult;
     }
 
-    return getDefaultResult();
+    return {
+      success: false,
+      error: 'No text content in API response',
+      fallback: getDefaultResult()
+    };
 
   } catch (error) {
     console.error(`[Sentiment Agent] Error:`, error.message);
-    return getDefaultResult();
+    return {
+      success: false,
+      error: error.message,
+      fallback: getDefaultResult()
+    };
   }
 }
 
@@ -134,19 +151,30 @@ function extractMessageContent(item) {
 /**
  * Parse JSON from LLM response
  * @param {string} text - Response text
- * @returns {object} Parsed result or default
+ * @returns {object} Result envelope with success/data or error/fallback
  */
 function parseJsonResponse(text) {
   try {
     // Try to extract JSON from the response
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      return {
+        success: true,
+        data: JSON.parse(jsonMatch[0])
+      };
     }
-    return getDefaultResult();
+    return {
+      success: false,
+      error: 'No JSON found in response',
+      fallback: getDefaultResult()
+    };
   } catch (error) {
     console.error(`[Sentiment Agent] Failed to parse JSON:`, error.message);
-    return getDefaultResult();
+    return {
+      success: false,
+      error: `JSON parse error: ${error.message}`,
+      fallback: getDefaultResult()
+    };
   }
 }
 

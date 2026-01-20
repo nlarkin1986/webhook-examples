@@ -14,6 +14,8 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
+const { sanitizeForPrompt } = require('../utils/sanitize');
+const { rateLimitedClaudeCall } = require('../utils/claude-limiter');
 
 const anthropic = new Anthropic();
 
@@ -31,17 +33,20 @@ async function runIntentAgent(conversationItems, availableTopics = []) {
   const formattedMessages = formatConversationForAnalysis(conversationItems);
   const formattedTopics = formatTopicsForMatching(availableTopics);
 
+  // Sanitize to prevent prompt injection attacks
+  const sanitizedMessages = sanitizeForPrompt(formattedMessages);
+
   const systemPrompt = buildSystemPrompt(formattedTopics);
 
   try {
-    const response = await anthropic.messages.create({
+    const response = await rateLimitedClaudeCall(anthropic, {
       model: 'claude-3-5-haiku-20241022',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [
         {
           role: 'user',
-          content: `Analyze the intent and topics of this customer service conversation:\n\n${formattedMessages}`
+          content: `Analyze the intent and topics of this customer service conversation:\n\n${sanitizedMessages}`
         }
       ]
     });
@@ -49,17 +54,29 @@ async function runIntentAgent(conversationItems, availableTopics = []) {
     // Extract JSON from response
     const textContent = response.content.find(c => c.type === 'text');
     if (textContent) {
-      const result = parseJsonResponse(textContent.text);
-      console.log(`[Intent Agent] Primary intent: ${result.primary_intent}`);
-      console.log(`[Intent Agent] Matched ${result.matched_topic_ids?.length || 0} topics`);
-      return result;
+      const parseResult = parseJsonResponse(textContent.text);
+      if (parseResult.success) {
+        console.log(`[Intent Agent] Primary intent: ${parseResult.data.primary_intent}`);
+        console.log(`[Intent Agent] Matched ${parseResult.data.matched_topic_ids?.length || 0} topics`);
+        return parseResult;
+      }
+      // Parse failed, return with error info
+      return parseResult;
     }
 
-    return getDefaultResult();
+    return {
+      success: false,
+      error: 'No text content in API response',
+      fallback: getDefaultResult()
+    };
 
   } catch (error) {
     console.error(`[Intent Agent] Error:`, error.message);
-    return getDefaultResult();
+    return {
+      success: false,
+      error: error.message,
+      fallback: getDefaultResult()
+    };
   }
 }
 
@@ -181,18 +198,29 @@ function extractMessageContent(item) {
 /**
  * Parse JSON from LLM response
  * @param {string} text - Response text
- * @returns {object} Parsed result or default
+ * @returns {object} Result envelope with success/data or error/fallback
  */
 function parseJsonResponse(text) {
   try {
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+      return {
+        success: true,
+        data: JSON.parse(jsonMatch[0])
+      };
     }
-    return getDefaultResult();
+    return {
+      success: false,
+      error: 'No JSON found in response',
+      fallback: getDefaultResult()
+    };
   } catch (error) {
     console.error(`[Intent Agent] Failed to parse JSON:`, error.message);
-    return getDefaultResult();
+    return {
+      success: false,
+      error: `JSON parse error: ${error.message}`,
+      fallback: getDefaultResult()
+    };
   }
 }
 

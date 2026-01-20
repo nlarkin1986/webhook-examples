@@ -8,16 +8,41 @@
  * - Structured logging
  */
 
-const dayjs = require('dayjs');
 const { runOrchestrator } = require('./agents/orchestrator');
+const { redactPII } = require('./utils/redact');
+
+/**
+ * Format timestamp for logging in YYYY-MM-DD HH:mm:ss format
+ * @returns {string} Formatted timestamp
+ */
+function formatTimestamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 5000, 30000]; // 1s, 5s, 30s
 
+/**
+ * In-Memory Job Queue
+ *
+ * LIMITATION: Jobs are stored in memory only and will be lost on server restart.
+ * This is acceptable for development and testing since Gladly webhooks will
+ * automatically re-fire if the initial request is not acknowledged with a 2xx response.
+ *
+ * For production deployments, consider:
+ * - Bull/BullMQ with Redis for persistent, distributed queue
+ * - File-based persistence for simple single-server deployments
+ * - Database-backed queue (PostgreSQL, etc.) for existing DB infrastructure
+ *
+ * See: https://github.com/OptimalBits/bull for Redis-based queue implementation
+ */
 class JobQueue {
-  constructor() {
+  constructor(concurrency = parseInt(process.env.JOB_CONCURRENCY) || 3) {
     this.queue = [];
-    this.processing = false;
+    this.concurrency = concurrency;
+    this.activeJobs = 0;
     this.processedCount = 0;
     this.failedCount = 0;
   }
@@ -32,7 +57,21 @@ class JobQueue {
       retryCount: 0,
       addedAt: new Date().toISOString()
     });
+
+    // Log queue metrics when job is added
+    this.logQueueMetrics('Job added');
+
     this.process();
+  }
+
+  /**
+   * Log current queue metrics for monitoring
+   * @param {string} context - Context for the log entry
+   */
+  logQueueMetrics(context) {
+    const stats = this.getStats();
+    const timestamp = formatTimestamp();
+    console.log(`[${timestamp}] Queue metrics (${context}): pending=${stats.queueSize}, active=${stats.activeJobs}, processed=${stats.processedCount}, failed=${stats.failedCount}`);
   }
 
   /**
@@ -44,16 +83,29 @@ class JobQueue {
   }
 
   /**
-   * Process jobs from the queue
+   * Process jobs from the queue with configurable concurrency
    */
   async process() {
-    if (this.processing || this.queue.length === 0) {
-      return;
-    }
+    // Start processing jobs up to concurrency limit
+    while (this.activeJobs < this.concurrency && this.queue.length > 0) {
+      this.activeJobs++;
+      const job = this.queue.shift();
 
-    this.processing = true;
-    const job = this.queue.shift();
-    const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
+      // Process job without awaiting to allow concurrent execution
+      this.executeJob(job).finally(() => {
+        this.activeJobs--;
+        // Try to process more jobs when one completes
+        this.process();
+      });
+    }
+  }
+
+  /**
+   * Execute a single job with logging and error handling
+   * @param {object} job - Job to execute
+   */
+  async executeJob(job) {
+    const timestamp = formatTimestamp();
 
     console.log(`[${timestamp}] Processing job: ${job.eventId}`);
     console.log(`[${timestamp}] Event type: ${job.eventType}`);
@@ -69,13 +121,6 @@ class JobQueue {
     } catch (error) {
       console.error(`[${timestamp}] Job failed: ${job.eventId}`, error.message);
       await this.handleFailure(job, error);
-    }
-
-    this.processing = false;
-
-    // Process next job if queue not empty
-    if (this.queue.length > 0) {
-      setImmediate(() => this.process());
     }
   }
 
@@ -110,7 +155,7 @@ class JobQueue {
     };
 
     console.log('\n=== ANALYSIS COMPLETE ===');
-    console.log(JSON.stringify(logEntry, null, 2));
+    console.log(JSON.stringify(redactPII(logEntry), null, 2));
     console.log('=========================\n');
 
     return result;
@@ -122,7 +167,7 @@ class JobQueue {
    * @param {Error} error - Error that caused failure
    */
   async handleFailure(job, error) {
-    const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
+    const timestamp = formatTimestamp();
 
     if (job.retryCount < MAX_RETRIES) {
       const delay = RETRY_DELAYS[job.retryCount] || RETRY_DELAYS[RETRY_DELAYS.length - 1];
@@ -153,7 +198,7 @@ class JobQueue {
       };
 
       console.log('\n=== JOB FAILED ===');
-      console.log(JSON.stringify(failedLogEntry, null, 2));
+      console.log(JSON.stringify(redactPII(failedLogEntry), null, 2));
       console.log('==================\n');
     }
   }
@@ -165,7 +210,8 @@ class JobQueue {
   getStats() {
     return {
       queueSize: this.queue.length,
-      processing: this.processing,
+      activeJobs: this.activeJobs,
+      concurrency: this.concurrency,
       processedCount: this.processedCount,
       failedCount: this.failedCount
     };
@@ -175,4 +221,12 @@ class JobQueue {
 // Singleton instance
 const queueProcessor = new JobQueue();
 
-module.exports = { queueProcessor };
+/**
+ * Get queue statistics (convenience export)
+ * @returns {object} Queue stats including pending, active, processed, and failed counts
+ */
+function getStats() {
+  return queueProcessor.getStats();
+}
+
+module.exports = { queueProcessor, getStats };

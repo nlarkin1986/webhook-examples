@@ -7,29 +7,81 @@
  * - CONVERSATION/CLOSED: Full analysis when conversation ends
  */
 
+const crypto = require('crypto');
 const express = require('express');
-const dayjs = require('dayjs');
+const { LRUCache } = require('lru-cache');
 const { queueProcessor } = require('./processor');
 
-// In-memory set for idempotency (prevents duplicate processing)
-const processedEvents = new Set();
+/**
+ * Format timestamp for logging in YYYY-MM-DD HH:mm:ss format
+ * @returns {string} Formatted timestamp
+ */
+function formatTimestamp() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 
-// Cleanup old events periodically (every 10 minutes, keep last hour)
-setInterval(() => {
-  const oneHourAgo = Date.now() - (60 * 60 * 1000);
-  for (const eventId of processedEvents) {
-    const timestamp = parseInt(eventId.split('-').pop(), 10);
-    if (timestamp && timestamp < oneHourAgo) {
-      processedEvents.delete(eventId);
-    }
+/**
+ * Middleware to verify Gladly webhook signatures
+ * Uses HMAC-SHA256 with timestamp validation to prevent replay attacks
+ */
+function verifyWebhookSignature(req, res, next) {
+  // Allow PING requests through without signature verification
+  // (required by Gladly for initial webhook endpoint validation)
+  if (req.body && req.body.type === 'PING') {
+    return next();
   }
-}, 10 * 60 * 1000);
+
+  const signature = req.headers['x-gladly-signature'];
+  const timestamp = req.headers['x-gladly-timestamp'];
+  const secret = process.env.GLADLY_WEBHOOK_SECRET;
+
+  if (!signature || !timestamp || !secret) {
+    console.log(`[${formatTimestamp()}] Webhook signature verification failed: missing signature, timestamp, or secret`);
+    return res.status(401).json({ error: 'Missing signature' });
+  }
+
+  // Prevent replay attacks (5 minute window)
+  const now = Math.floor(Date.now() / 1000);
+  const requestTimestamp = parseInt(timestamp, 10);
+  if (Math.abs(now - requestTimestamp) > 300) {
+    console.log(`[${formatTimestamp()}] Webhook signature verification failed: request too old`);
+    return res.status(401).json({ error: 'Request too old' });
+  }
+
+  // Compute expected signature
+  const payload = `${timestamp}.${JSON.stringify(req.body)}`;
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex');
+
+  // Use timing-safe comparison to prevent timing attacks
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+
+  if (signatureBuffer.length !== expectedBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) {
+    console.log(`[${formatTimestamp()}] Webhook signature verification failed: invalid signature`);
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+
+  next();
+}
+
+// LRU cache for idempotency (prevents duplicate processing)
+// Bounded to 10K entries with 1 hour TTL - handles cleanup automatically
+const processedEvents = new LRUCache({
+  max: 10000,
+  ttl: 60 * 60 * 1000  // 1 hour
+});
 
 module.exports = () => {
   const router = express.Router();
 
-  router.post('/', async (req, res) => {
-    const timestamp = dayjs().format('YYYY-MM-DD HH:mm:ss');
+  router.post('/', verifyWebhookSignature, async (req, res) => {
+    const timestamp = formatTimestamp();
     console.log(`[${timestamp}] Got POST from Gladly: ${req.body.type}`);
 
     // Handle PING (required by Gladly to validate webhook endpoint)
@@ -66,7 +118,15 @@ module.exports = () => {
     }
 
     // Mark as processed
-    processedEvents.add(eventId);
+    processedEvents.set(eventId, true);
+
+    // Check queue size limit to prevent memory exhaustion
+    const currentQueueSize = queueProcessor.getQueueSize();
+    if (currentQueueSize > 1000) {
+      console.warn(`[${timestamp}] Queue full (${currentQueueSize} jobs), rejecting request`);
+      processedEvents.delete(eventId); // Allow retry when queue clears
+      return res.status(503).json({ error: 'Service temporarily unavailable' });
+    }
 
     // Return 200 immediately (async processing)
     res.sendStatus(200);

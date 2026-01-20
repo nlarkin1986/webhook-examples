@@ -7,7 +7,34 @@
  * - Tools are primitives, agents compose them
  */
 
-const { getConversation, getItems, listTopics, addTopic, getCustomerById } = require('../../util/api');
+const { getConversation, getItems, listTopics, addTopic, updateConversation, getCustomerById } = require('../../util/api');
+const { runSentimentAgent } = require('../agents/sentiment-agent');
+const { runIntentAgent } = require('../agents/intent-agent');
+
+/**
+ * Topics cache with 5 minute TTL
+ * Reduces redundant API calls since topics rarely change
+ */
+let topicsCache = { data: null, expiry: 0 };
+
+/**
+ * Get topics with caching to reduce API calls
+ * @returns {Promise<Array>} List of topics
+ */
+async function getCachedTopics() {
+  if (Date.now() < topicsCache.expiry && topicsCache.data) {
+    console.log('[Topics] Using cached topics');
+    return topicsCache.data;
+  }
+
+  console.log('[Topics] Fetching topics from API');
+  const response = await listTopics();
+  topicsCache = {
+    data: response.data,
+    expiry: Date.now() + 5 * 60 * 1000  // 5 min TTL
+  };
+  return topicsCache.data;
+}
 
 /**
  * Tool definitions following MCP schema
@@ -70,6 +97,24 @@ const toolDefinitions = [
     }
   },
   {
+    name: 'remove_topic',
+    description: 'Remove a topic from a conversation. Use when a topic was incorrectly applied.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        conversationId: {
+          type: 'string',
+          description: 'The Gladly conversation ID'
+        },
+        topicId: {
+          type: 'string',
+          description: 'The topic ID to remove'
+        }
+      },
+      required: ['conversationId', 'topicId']
+    }
+  },
+  {
     name: 'get_customer',
     description: 'Get customer profile by ID. Returns customer object with name, emails, phones, and custom attributes.',
     input_schema: {
@@ -104,6 +149,38 @@ const toolDefinitions = [
       },
       required: ['success', 'summary']
     }
+  },
+  {
+    name: 'analyze_sentiment',
+    description: 'Run sentiment analysis on conversation messages. Returns sentiment score, label, and indicators.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        conversation_content: {
+          type: 'string',
+          description: 'The formatted conversation messages to analyze'
+        }
+      },
+      required: ['conversation_content']
+    }
+  },
+  {
+    name: 'analyze_intent',
+    description: 'Classify customer intent and match to available topics. Returns primary intent and matched topic IDs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        conversation_content: {
+          type: 'string',
+          description: 'The formatted conversation messages to analyze'
+        },
+        available_topics: {
+          type: 'array',
+          description: 'List of available Gladly topics to match against'
+        }
+      },
+      required: ['conversation_content', 'available_topics']
+    }
   }
 ];
 
@@ -133,10 +210,10 @@ async function executeTool(toolName, input) {
       }
 
       case 'list_topics': {
-        const response = await listTopics();
+        const data = await getCachedTopics();
         return {
           success: true,
-          data: response.data
+          data: data
         };
       }
 
@@ -147,6 +224,33 @@ async function executeTool(toolName, input) {
         return {
           success: true,
           message: `Topic ${input.topicId} added to conversation ${input.conversationId}`
+        };
+      }
+
+      case 'remove_topic': {
+        // First get the current conversation to find existing topicIds
+        const conversationResponse = await getConversation(input.conversationId);
+        const currentTopicIds = conversationResponse.data.topicIds || [];
+
+        // Check if the topic exists on this conversation
+        if (!currentTopicIds.includes(input.topicId)) {
+          return {
+            success: false,
+            error: `Topic ${input.topicId} is not applied to conversation ${input.conversationId}`
+          };
+        }
+
+        // Filter out the topic to remove
+        const updatedTopicIds = currentTopicIds.filter(id => id !== input.topicId);
+
+        // Update the conversation with the new topicIds array
+        await updateConversation(input.conversationId, {
+          topicIds: updatedTopicIds
+        });
+
+        return {
+          success: true,
+          message: `Topic ${input.topicId} removed from conversation ${input.conversationId}`
         };
       }
 
@@ -165,6 +269,34 @@ async function executeTool(toolName, input) {
           results: input.results || {},
           shouldContinue: false
         };
+      }
+
+      case 'analyze_sentiment': {
+        // Parse conversation content if it's a JSON string of items
+        let items;
+        try {
+          items = JSON.parse(input.conversation_content);
+        } catch {
+          // If not JSON, treat as pre-formatted text and pass to agent
+          items = input.conversation_content;
+        }
+        const result = await runSentimentAgent(items);
+        // Propagate the result envelope from the agent
+        return result;
+      }
+
+      case 'analyze_intent': {
+        // Parse conversation content if it's a JSON string of items
+        let items;
+        try {
+          items = JSON.parse(input.conversation_content);
+        } catch {
+          // If not JSON, treat as pre-formatted text and pass to agent
+          items = input.conversation_content;
+        }
+        const result = await runIntentAgent(items, input.available_topics || []);
+        // Propagate the result envelope from the agent
+        return result;
       }
 
       default:
@@ -194,5 +326,6 @@ function formatToolResult(result) {
 module.exports = {
   toolDefinitions,
   executeTool,
-  formatToolResult
+  formatToolResult,
+  getCachedTopics
 };

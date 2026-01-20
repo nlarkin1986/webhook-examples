@@ -11,10 +11,36 @@ require('dotenv').config();
 // Required libraries
 const express = require('express');
 const bodyParser = require('body-parser');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 
-// Middleware
+// Rate limiting middleware
+
+// Global rate limit: 100 requests per minute total
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100,
+  message: { error: 'Too many requests' },
+  standardHeaders: true, // Return rate limit info in RateLimit-* headers
+  legacyHeaders: false   // Disable X-RateLimit-* headers
+});
+
+// Per-IP rate limit: 20 requests per minute per IP
+const ipLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,
+  keyGenerator: (req) => req.ip,
+  message: { error: 'Too many requests from this IP' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+// Apply rate limiters to webhook endpoint
+app.use('/', globalLimiter);
+app.use('/', ipLimiter);
+
+// Body parsing middleware
 app.use(bodyParser.json());
 app.use(bodyParser.raw({ type: () => true }));
 
