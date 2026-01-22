@@ -274,4 +274,49 @@ export const shopifyApi = {
     apiRequest('/shopify/connection', { method: 'DELETE', token }),
 };
 
+// Intelligence API
+import type {
+  IntelligenceSummary,
+  TrendsResponse,
+  ProductsResponse,
+  ProductParams,
+  GeographicResponse,
+  GeoParams,
+  AlertsResponse,
+  AlertParams,
+  Alert,
+} from '@/types/intelligence';
+
+export const intelligenceApi = {
+  getSummary: (token: string, timeRange = 'last_7d') =>
+    apiRequest<IntelligenceSummary>(`/intelligence/summary?timeRange=${timeRange}`, { token }),
+
+  getTrends: (token: string, timeRange = 'last_7d') =>
+    apiRequest<TrendsResponse>(`/intelligence/trends?timeRange=${timeRange}`, { token }),
+
+  getProducts: (token: string, params?: ProductParams) => {
+    const query = new URLSearchParams(
+      Object.entries(params || {}).filter(([, v]) => v != null) as [string, string][]
+    ).toString();
+    return apiRequest<ProductsResponse>(`/intelligence/products${query ? `?${query}` : ''}`, { token });
+  },
+
+  getGeographic: (token: string, params?: GeoParams) => {
+    const query = new URLSearchParams(
+      Object.entries(params || {}).filter(([, v]) => v != null) as [string, string][]
+    ).toString();
+    return apiRequest<GeographicResponse>(`/intelligence/geographic${query ? `?${query}` : ''}`, { token });
+  },
+
+  getAlerts: (token: string, params?: AlertParams) => {
+    const query = new URLSearchParams(
+      Object.entries(params || {}).filter(([, v]) => v != null) as [string, string][]
+    ).toString();
+    return apiRequest<AlertsResponse>(`/intelligence/alerts${query ? `?${query}` : ''}`, { token });
+  },
+
+  updateAlert: (token: string, alertId: string, data: { status: string; note?: string }) =>
+    apiRequest<{ alert: Alert }>(`/intelligence/alerts/${alertId}`, { method: 'PATCH', body: data, token }),
+};
+
 export { ApiError };
