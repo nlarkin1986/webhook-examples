@@ -7,6 +7,7 @@
  * - Gladly connection management
  * - Agent configuration
  * - Analysis history and stats
+ * - Customer Intelligence (trends, alerts, feedback)
  */
 
 const express = require('express');
@@ -16,6 +17,7 @@ const tenantsController = require('./controllers/tenants');
 const gladlyController = require('./controllers/gladly');
 const configController = require('./controllers/config');
 const analysisController = require('./controllers/analysis');
+const intelligenceController = require('./controllers/intelligence');
 
 module.exports = () => {
   const router = express.Router();
@@ -105,6 +107,63 @@ module.exports = () => {
 
   // GET /api/admin/analysis/:id - Get specific analysis
   router.get('/analysis/:id', authenticate, analysisController.getAnalysis);
+
+  // ============================================================================
+  // Customer Intelligence Routes (requires auth)
+  // ============================================================================
+
+  // Dashboard & Summary
+  // GET /api/admin/intelligence/summary - Get dashboard summary
+  router.get('/intelligence/summary', authenticate, intelligenceController.getSummary);
+
+  // Trends
+  // GET /api/admin/intelligence/trends - Get trending/emerging/declining topics
+  router.get('/intelligence/trends', authenticate, intelligenceController.getTrends);
+
+  // Products
+  // GET /api/admin/intelligence/products - Get product feedback insights
+  router.get('/intelligence/products', authenticate, intelligenceController.getProducts);
+
+  // GET /api/admin/intelligence/products/:productId - Get product detail
+  router.get('/intelligence/products/:productId', authenticate, intelligenceController.getProductDetail);
+
+  // Geographic
+  // GET /api/admin/intelligence/geographic - Get geographic patterns
+  router.get('/intelligence/geographic', authenticate, intelligenceController.getGeographic);
+
+  // Alerts
+  // GET /api/admin/intelligence/alerts - List alerts
+  router.get('/intelligence/alerts', authenticate, intelligenceController.getAlerts);
+
+  // GET /api/admin/intelligence/alerts/:id - Get specific alert
+  router.get('/intelligence/alerts/:id', authenticate, intelligenceController.getAlert);
+
+  // POST /api/admin/intelligence/alerts - Create custom alert
+  router.post('/intelligence/alerts', authenticate, authorize('admin'), intelligenceController.createCustomAlert);
+
+  // PATCH /api/admin/intelligence/alerts/:id - Update alert status
+  router.patch('/intelligence/alerts/:id', authenticate, authorize('admin'), intelligenceController.updateAlert);
+
+  // Feedback
+  // GET /api/admin/intelligence/feedback - List feedback items
+  router.get('/intelligence/feedback', authenticate, intelligenceController.listFeedback);
+
+  // GET /api/admin/intelligence/feedback/search - Search feedback
+  router.get('/intelligence/feedback/search', authenticate, intelligenceController.searchFeedback);
+
+  // Configuration
+  // GET /api/admin/intelligence/config - Get intelligence config
+  router.get('/intelligence/config', authenticate, intelligenceController.getIntelligenceConfig);
+
+  // PATCH /api/admin/intelligence/config - Update intelligence config
+  router.patch('/intelligence/config', authenticate, authorize('admin'), intelligenceController.updateIntelligenceConfig);
+
+  // Manual Operations (admin only)
+  // POST /api/admin/intelligence/aggregate - Trigger aggregation
+  router.post('/intelligence/aggregate', authenticate, authorize('admin'), intelligenceController.triggerAggregation);
+
+  // POST /api/admin/intelligence/detect-trends - Trigger trend detection
+  router.post('/intelligence/detect-trends', authenticate, authorize('admin'), intelligenceController.triggerTrendDetection);
 
   return router;
 };
