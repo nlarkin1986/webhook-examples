@@ -18,6 +18,7 @@ const gladlyController = require('./controllers/gladly');
 const configController = require('./controllers/config');
 const analysisController = require('./controllers/analysis');
 const intelligenceController = require('./controllers/intelligence');
+const customer360Controller = require('./controllers/customer360');
 
 module.exports = () => {
   const router = express.Router();
@@ -164,6 +165,57 @@ module.exports = () => {
 
   // POST /api/admin/intelligence/detect-trends - Trigger trend detection
   router.post('/intelligence/detect-trends', authenticate, authorize('admin'), intelligenceController.triggerTrendDetection);
+
+  // ============================================================================
+  // Customer 360 Routes (requires auth)
+  // ============================================================================
+
+  // Stats
+  // GET /api/admin/customers/stats - Get customer 360 dashboard statistics
+  router.get('/customers/stats', authenticate, customer360Controller.getStats);
+
+  // Tier Configuration
+  // GET /api/admin/customers/tiers/config - Get tier thresholds
+  router.get('/customers/tiers/config', authenticate, customer360Controller.getTierConfig);
+
+  // PATCH /api/admin/customers/tiers/config - Update tier thresholds
+  router.patch('/customers/tiers/config', authenticate, authorize('admin'), customer360Controller.updateTierConfig);
+
+  // Customer List
+  // GET /api/admin/customers - List customers with filtering
+  router.get('/customers', authenticate, customer360Controller.listCustomers);
+
+  // Customer by Gladly ID (must come before :id route)
+  // GET /api/admin/customers/gladly/:gladlyCustomerId - Get by Gladly ID
+  router.get('/customers/gladly/:gladlyCustomerId', authenticate, customer360Controller.getCustomerByGladlyId);
+
+  // Customer Detail
+  // GET /api/admin/customers/:id - Get customer 360 profile
+  router.get('/customers/:id', authenticate, customer360Controller.getCustomer);
+
+  // Customer Events
+  // GET /api/admin/customers/:id/events - Get customer activity stream
+  router.get('/customers/:id/events', authenticate, customer360Controller.getCustomerEvents);
+
+  // Customer Sync
+  // POST /api/admin/customers/:id/sync - Trigger Shopify sync for customer
+  router.post('/customers/:id/sync', authenticate, authorize('admin'), customer360Controller.syncCustomer);
+
+  // ============================================================================
+  // Shopify Integration Routes (requires auth)
+  // ============================================================================
+
+  // GET /api/admin/shopify/connection - Get Shopify connection status
+  router.get('/shopify/connection', authenticate, customer360Controller.getShopifyConnection);
+
+  // POST /api/admin/shopify/connection - Save Shopify credentials
+  router.post('/shopify/connection', authenticate, authorize('admin'), customer360Controller.saveShopifyConnection);
+
+  // POST /api/admin/shopify/test - Test Shopify connection
+  router.post('/shopify/test', authenticate, authorize('admin'), customer360Controller.testShopifyConnection);
+
+  // DELETE /api/admin/shopify/connection - Remove Shopify credentials
+  router.delete('/shopify/connection', authenticate, authorize('admin'), customer360Controller.deleteShopifyConnection);
 
   return router;
 };

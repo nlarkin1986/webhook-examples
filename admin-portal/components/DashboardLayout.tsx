@@ -7,7 +7,9 @@ import { AuthProvider, useAuth } from '@/lib/auth';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard' },
+  { name: 'Customers', href: '/customers' },
   { name: 'Gladly Connection', href: '/settings/gladly' },
+  { name: 'Shopify', href: '/settings/shopify' },
   { name: 'Agent Config', href: '/settings/config' },
   { name: 'Analysis History', href: '/history' },
 ];
