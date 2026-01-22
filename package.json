@@ -7,15 +7,18 @@
   "homepage": "https://github.com/gladly/webhook-examples#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
+    "@faker-js/faker": "^9.0.0",
     "express-rate-limit": "^7.5.0",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "axios": "^1.13.2",
+    "bcrypt": "^5.1.1",
     "bottleneck": "^2.19.5",
     "lru-cache": "^10.4.3",
     "body-parser": "^1.20.3",
     "dayjs": "^1.11.19",
     "dotenv": "^16.4.7",
     "express": "^4.22.1",
+    "pg": "^8.13.1",
     "slack-node": "^0.1.8",
     "slugid": "^3.2.0",
     "uuid": "^9.0.1"
@@ -23,6 +26,9 @@
   "scripts": {
     "start:analysis": "node conversation-analysis/index.js",
     "start:csat": "node csat-survey/index.js",
-    "start:chatbot": "node backend-chatbot/index.js"
+    "start:chatbot": "node backend-chatbot/index.js",
+    "seed": "node conversation-analysis/db/seed.js",
+    "seed:clean": "node conversation-analysis/db/seed.js --clean",
+    "seed:verify": "node conversation-analysis/db/seed.js --verify-only"
   }
 }
