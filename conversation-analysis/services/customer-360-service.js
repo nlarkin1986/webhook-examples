@@ -10,6 +10,19 @@
 const db = require('../db/connection');
 const { calculateCustomerMetrics, assignCustomerTier } = require('./metrics-calculator');
 
+// Track in-flight sync operations to prevent duplicates
+const inFlightSyncs = new Map();
+
+/**
+ * Escape SQL LIKE/ILIKE pattern metacharacters to prevent
+ * DoS via expensive wildcard patterns.
+ * @param {string} pattern - Raw user input
+ * @returns {string} Escaped pattern safe for LIKE/ILIKE
+ */
+function escapeLikePattern(pattern) {
+  return pattern.replace(/[%_\\]/g, '\\$&');
+}
+
 /**
  * Get tier thresholds for a tenant
  * @param {string} tenantId - Tenant UUID
@@ -256,7 +269,7 @@ async function listCustomers(tenantId, options = {}) {
 
   if (search) {
     conditions.push(`(display_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`);
-    params.push(`%${search}%`);
+    params.push(`%${escapeLikePattern(search)}%`);
     paramIndex++;
   }
 
@@ -273,15 +286,8 @@ async function listCustomers(tenantId, options = {}) {
   const sortColumn = validSortColumns.includes(sortBy) ? sortBy : 'ltv';
   const order = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
-  // Get total count
-  const countResult = await db.queryWithTenant(tenantId, `
-    SELECT COUNT(*) as total FROM customer_360 WHERE ${whereClause}
-  `, params);
-
-  const total = parseInt(countResult.rows[0].total, 10);
-
-  // Get paginated data
-  const dataResult = await db.queryWithTenant(tenantId, `
+  // Single query with window function for count + data (reduces DB round-trips by 50%)
+  const result = await db.queryWithTenant(tenantId, `
     SELECT
       id, gladly_customer_id, shopify_customer_id,
       display_name, email, phone, photo_url,
@@ -290,15 +296,22 @@ async function listCustomers(tenantId, options = {}) {
       total_orders, total_returns, last_transaction_at,
       total_conversations, avg_sentiment_score, latest_sentiment_label,
       gladly_synced_at, shopify_synced_at,
-      created_at, updated_at
+      created_at, updated_at,
+      COUNT(*) OVER() as total_count
     FROM customer_360
     WHERE ${whereClause}
     ORDER BY ${sortColumn} ${order} NULLS LAST
     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
   `, [...params, pageSize, offset]);
 
+  // Extract total from first row (window function includes it in every row)
+  const total = parseInt(result.rows[0]?.total_count || 0, 10);
+
+  // Remove total_count from each row before returning
+  const data = result.rows.map(({ total_count, ...customer }) => customer);
+
   return {
-    data: dataResult.rows,
+    data,
     total,
     page,
     pageSize,
@@ -314,6 +327,31 @@ async function listCustomers(tenantId, options = {}) {
  * @returns {Promise<object>} Enriched customer record
  */
 async function enrichWithShopifyData(tenantId, customerId, shopifyClient) {
+  const key = `${tenantId}:${customerId}`;
+
+  // Return existing in-flight promise if one exists
+  if (inFlightSyncs.has(key)) {
+    return inFlightSyncs.get(key);
+  }
+
+  const syncPromise = doEnrichWithShopifyData(tenantId, customerId, shopifyClient);
+  inFlightSyncs.set(key, syncPromise);
+
+  try {
+    return await syncPromise;
+  } finally {
+    inFlightSyncs.delete(key);
+  }
+}
+
+/**
+ * Internal implementation of Shopify data enrichment
+ * @param {string} tenantId - Tenant UUID
+ * @param {string} customerId - Customer 360 UUID
+ * @param {object} shopifyClient - Shopify client instance
+ * @returns {Promise<object>} Enriched customer record
+ */
+async function doEnrichWithShopifyData(tenantId, customerId, shopifyClient) {
   // Get current customer record
   const customer = await getCustomer360ById(tenantId, customerId);
   if (!customer || !customer.email) {

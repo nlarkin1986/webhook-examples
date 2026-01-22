@@ -15,6 +15,16 @@ const { createShopifyClient, testConnection } = require('../../services/shopify-
 const { calculateCustomerMetrics } = require('../../services/metrics-calculator');
 
 // ============================================================================
+// UUID Validation
+// ============================================================================
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isValidUUID(id) {
+  return UUID_REGEX.test(id);
+}
+
+// ============================================================================
 // Dashboard & Stats
 // ============================================================================
 
@@ -91,6 +101,10 @@ async function getCustomer(req, res) {
     const tenantId = req.user.tenantId;
     const customerId = req.params.id;
 
+    if (!isValidUUID(customerId)) {
+      return res.status(400).json({ error: 'Invalid customer ID format' });
+    }
+
     const customer = await customer360Service.getCustomer360ById(tenantId, customerId);
 
     if (!customer) {
@@ -112,6 +126,10 @@ async function getCustomerByGladlyId(req, res) {
   try {
     const tenantId = req.user.tenantId;
     const gladlyCustomerId = req.params.gladlyCustomerId;
+
+    if (!isValidUUID(gladlyCustomerId)) {
+      return res.status(400).json({ error: 'Invalid Gladly customer ID format' });
+    }
 
     const customer = await customer360Service.getCustomer360ByGladlyId(tenantId, gladlyCustomerId);
 
@@ -142,6 +160,10 @@ async function getCustomerEvents(req, res) {
       eventTypes,
       limit = 20
     } = req.query;
+
+    if (!isValidUUID(customerId)) {
+      return res.status(400).json({ error: 'Invalid customer ID format' });
+    }
 
     // Check customer exists
     const customer = await customer360Service.getCustomer360ById(tenantId, customerId);
@@ -190,6 +212,10 @@ async function syncCustomer(req, res) {
     const tenantId = req.user.tenantId;
     const customerId = req.params.id;
     const force = req.body.force === true;
+
+    if (!isValidUUID(customerId)) {
+      return res.status(400).json({ error: 'Invalid customer ID format' });
+    }
 
     // Get customer
     const customer = await customer360Service.getCustomer360ById(tenantId, customerId);
