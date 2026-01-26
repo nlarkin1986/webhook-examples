@@ -1,0 +1,11 @@
+{
+  "id": "1CdbPSpSRByN1GzWdpfb1Q",
+  "emails": [
+    {
+      "normalized": "test@example.com",
+      "original": "test@example.com"
+    }
+  ],
+  "phones": [],
+  "name": "Test Customer"
+}

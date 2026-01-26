@@ -1,0 +1,40 @@
+<?Template languageVersion="1.1" ?>
+<Card title="Conversation Analysis">
+  <Section>
+    <Text fontWeight="medium">{{ analyses | length }} Analyses</Text>
+  </Section>
+
+  <List dataSource="analyses" separateItems="true">
+    <Drawer initialState="expandFirst">
+      <Fixed>
+        <Text fontWeight="medium">{{ analyzedAt }}</Text>
+        <Spacer size="extraSmall" />
+        <Text>Sentiment: {{ sentiment.label }} ({{ sentiment.score }})</Text>
+      </Fixed>
+
+      <Expandable>
+        <Spacer size="small" />
+
+        <Text>Trajectory: {{ sentiment.trajectory }}</Text>
+        <Text>Confidence: {{ sentiment.confidence }}</Text>
+
+        <Spacer size="small" />
+        <Divider />
+        <Spacer size="small" />
+
+        <Text fontWeight="medium">Intent Analysis</Text>
+        <Text>Primary Intent: {{ intent.primaryIntent }}</Text>
+        <Text>Urgency: {{ intent.urgency }}</Text>
+
+        <Spacer size="small" />
+        <Divider />
+        <Spacer size="small" />
+
+        <Text fontWeight="medium">Summary</Text>
+        <Text>{{ summary }}</Text>
+
+        <Spacer size="small" />
+      </Expandable>
+    </Drawer>
+  </List>
+</Card>
