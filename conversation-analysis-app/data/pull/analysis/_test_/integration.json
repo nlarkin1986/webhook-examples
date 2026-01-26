@@ -1,0 +1,6 @@
+{
+  "configuration": {
+    "apiBaseUrl": "https://example.ngrok-free.dev"
+  },
+  "secrets": {}
+}

@@ -1,0 +1,5 @@
+{
+  "description": "Display AI conversation analysis results",
+  "graphqlSchema": "data",
+  "graphqlType": "CustomerAnalysis"
+}

@@ -1,0 +1,32 @@
+type SentimentResult {
+  score: Float
+  label: String
+  confidence: Float
+  trajectory: String
+  keyIndicators: [String]
+}
+
+type IntentResult {
+  primaryIntent: String
+  intentConfidence: Float
+  urgency: String
+  detectedTopics: [String]
+}
+
+type ConversationAnalysis {
+  conversationId: String!
+  analyzedAt: String!
+  sentiment: SentimentResult
+  intent: IntentResult
+  topicsApplied: [String]
+  summary: String
+}
+
+type CustomerAnalysis @dataType(name: "conversation_analysis", version: "1.0") {
+  customerId: String!
+  analyses: [ConversationAnalysis]
+}
+
+type Query {
+  customerAnalysis: CustomerAnalysis
+}

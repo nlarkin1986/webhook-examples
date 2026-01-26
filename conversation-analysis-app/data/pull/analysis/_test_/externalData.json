@@ -1,0 +1,27 @@
+{
+  "conversation_analysis": [
+    {
+      "customerId": "1CdbPSpSRByN1GzWdpfb1Q",
+      "analyses": [
+        {
+          "conversationId": "conv-123",
+          "analyzedAt": "2025-01-20T12:00:00Z",
+          "sentiment": {
+            "score": 0.75,
+            "label": "positive",
+            "confidence": 0.85,
+            "trajectory": "improving"
+          },
+          "intent": {
+            "primaryIntent": "product_inquiry",
+            "intentConfidence": 0.9,
+            "urgency": "medium",
+            "detectedTopics": ["product", "pricing"]
+          },
+          "topicsApplied": ["Sales", "Product Info"],
+          "summary": "Customer inquired about product pricing and features."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "dataType": {
+    "name": "conversation_analysis",
+    "version": "1.0"
+  },
+  "httpMethod": "GET"
+}
